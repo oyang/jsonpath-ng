@@ -23,12 +23,8 @@ lint:
 	@flake8 --exclude=tests .
 
 test: clean
-	@echo "$(OK_COLOR)==> Runnings tests ...$(NO_COLOR)"
-	@py.test -s -v --capture sys --cov jsonpath_ng --cov-report term-missing
-
-coverage:
-	@coverage run --source jsonpath_ng -m py.test
-	@coverage report
+	@echo "$(OK_COLOR)==> Running tests ...$(NO_COLOR)"
+	@tox
 
 tag:
 	@echo "$(OK_COLOR)==> Creating tag $(version) ...$(NO_COLOR)"
@@ -47,7 +43,7 @@ history:
 
 clean:
 	@echo "$(OK_COLOR)==> Cleaning up files that are already in .gitignore...$(NO_COLOR)"
-	@for pattern in `cat .gitignore`; do find . -name "*/$$pattern" -delete; done
+	@git clean -Xf
 
 publish:
 	@echo "$(OK_COLOR)==> Releasing package ...$(NO_COLOR)"

@@ -1,8 +1,6 @@
-from __future__ import unicode_literals, print_function, absolute_import, division, generators, nested_scopes
 import logging
-import six
-from six.moves import xrange
 from itertools import *  # noqa
+from jsonpath_ng.lexer import JsonPathLexer
 
 # Get logger name
 logger = logging.getLogger(__name__)
@@ -11,8 +9,11 @@ logger = logging.getLogger(__name__)
 # ... could be a kwarg pervasively but uses are rare and simple today
 auto_id_field = None
 
+NOT_SET = object()
+LIST_KEY = object()
 
-class JSONPath(object):
+
+class JSONPath:
     """
     The base class for JSONPath abstract syntax; those
     methods stubbed here are the interface to supported
@@ -27,6 +28,9 @@ class JSONPath(object):
         """
         raise NotImplementedError()
 
+    def find_or_create(self, data):
+        return self.find(data)
+
     def update(self, data, val):
         """
         Returns `data` with the specified path replaced by `val`. Only updates
@@ -34,6 +38,9 @@ class JSONPath(object):
         """
 
         raise NotImplementedError()
+
+    def update_or_create(self, data, val):
+        return self.update(data, val)
 
     def filter(self, fn, data):
         """
@@ -68,7 +75,7 @@ class JSONPath(object):
             return DatumInContext(value, path=Root(), context=None)
 
 
-class DatumInContext(object):
+class DatumInContext:
     """
     Represents a datum along a path from a context.
 
@@ -210,6 +217,9 @@ class Root(JSONPath):
     def __eq__(self, other):
         return isinstance(other, Root)
 
+    def __hash__(self):
+        return hash('$')
+
 
 class This(JSONPath):
     """
@@ -233,6 +243,9 @@ class This(JSONPath):
 
     def __eq__(self, other):
         return isinstance(other, This)
+
+    def __hash__(self):
+        return hash('this')
 
 
 class Child(JSONPath):
@@ -261,6 +274,23 @@ class Child(JSONPath):
             self.right.update(datum.value, val)
         return data
 
+    def find_or_create(self, datum):
+        datum = DatumInContext.wrap(datum)
+        submatches = []
+        for subdata in self.left.find_or_create(datum):
+            if isinstance(subdata, AutoIdForDatum):
+                # Extra special case: auto ids do not have children,
+                # so cut it off right now rather than auto id the auto id
+                continue
+            for submatch in self.right.find_or_create(subdata):
+                submatches.append(submatch)
+        return submatches
+
+    def update_or_create(self, data, val):
+        for datum in self.left.find_or_create(data):
+            self.right.update_or_create(datum.value, val)
+        return _clean_list_keys(data)
+
     def filter(self, fn, data):
         for datum in self.left.find(data):
             self.right.filter(fn, datum.value)
@@ -274,6 +304,9 @@ class Child(JSONPath):
 
     def __repr__(self):
         return '%s(%r, %r)' % (self.__class__.__name__, self.left, self.right)
+
+    def __hash__(self):
+        return hash((self.left, self.right))
 
 
 class Parent(JSONPath):
@@ -295,6 +328,9 @@ class Parent(JSONPath):
 
     def __repr__(self):
         return 'Parent()'
+
+    def __hash__(self):
+        return hash('parent')
 
 
 class Where(JSONPath):
@@ -329,6 +365,9 @@ class Where(JSONPath):
 
     def __eq__(self, other):
         return isinstance(other, Where) and other.left == self.left and other.right == self.right
+
+    def __hash__(self):
+        return hash((self.left, self.right))
 
 class Descendants(JSONPath):
     """
@@ -439,6 +478,13 @@ class Descendants(JSONPath):
     def __eq__(self, other):
         return isinstance(other, Descendants) and self.left == other.left and self.right == other.right
 
+    def __repr__(self):
+        return '%s(%r, %r)' % (self.__class__.__name__, self.left, self.right)
+
+    def __hash__(self):
+        return hash((self.left, self.right))
+
+
 class Union(JSONPath):
     """
     JSONPath that returns the union of the results of each match.
@@ -458,6 +504,12 @@ class Union(JSONPath):
 
     def find(self, data):
         return self.left.find(data) + self.right.find(data)
+
+    def __eq__(self, other):
+        return isinstance(other, Union) and self.left == other.left and self.right == other.right
+
+    def __hash__(self):
+        return hash((self.left, self.right))
 
 class Intersect(JSONPath):
     """
@@ -480,6 +532,12 @@ class Intersect(JSONPath):
     def find(self, data):
         raise NotImplementedError()
 
+    def __eq__(self, other):
+        return isinstance(other, Intersect) and self.left == other.left and self.right == other.right
+
+    def __hash__(self):
+        return hash((self.left, self.right))
+
 
 class Fields(JSONPath):
     """
@@ -493,15 +551,20 @@ class Fields(JSONPath):
     def __init__(self, *fields):
         self.fields = fields
 
-    def get_field_datum(self, datum, field):
+    @staticmethod
+    def get_field_datum(datum, field, create):
         if field == auto_id_field:
             return AutoIdForDatum(datum)
-        else:
-            try:
-                field_value = datum.value[field] # Do NOT use `val.get(field)` since that confuses None as a value and None due to `get`
-                return DatumInContext(value=field_value, path=Fields(field), context=datum)
-            except (TypeError, KeyError, AttributeError):
-                return None
+        try:
+            field_value = datum.value.get(field, NOT_SET)
+            if field_value is NOT_SET:
+                if create:
+                    datum.value[field] = field_value = {}
+                else:
+                    return None
+            return DatumInContext(field_value, path=Fields(field), context=datum)
+        except (TypeError, AttributeError):
+            return None
 
     def reified_fields(self, datum):
         if '*' not in self.fields:
@@ -514,18 +577,31 @@ class Fields(JSONPath):
                 return ()
 
     def find(self, datum):
-        datum  = DatumInContext.wrap(datum)
+        return self._find_base(datum, create=False)
 
-        return  [field_datum
-                 for field_datum in [self.get_field_datum(datum, field) for field in self.reified_fields(datum)]
-                 if field_datum is not None]
+    def find_or_create(self, datum):
+        return self._find_base(datum, create=True)
+
+    def _find_base(self, datum, create):
+        datum = DatumInContext.wrap(datum)
+        field_data = [self.get_field_datum(datum, field, create)
+                      for field in self.reified_fields(datum)]
+        return [fd for fd in field_data if fd is not None]
 
     def update(self, data, val):
+        return self._update_base(data, val, create=False)
+
+    def update_or_create(self, data, val):
+        return self._update_base(data, val, create=True)
+
+    def _update_base(self, data, val, create):
         if data is not None:
             for field in self.reified_fields(DatumInContext.wrap(data)):
-                if field in data:
+                if create and field not in data:
+                    data[field] = {}
+                if type(data) is not bool and field in data:
                     if hasattr(val, '__call__'):
-                        val(data[field], data, field)
+                        data[field] = val(data[field], data, field)
                     else:
                         data[field] = val
         return data
@@ -539,13 +615,23 @@ class Fields(JSONPath):
         return data
 
     def __str__(self):
-        return ','.join(map(str, self.fields))
+        # If any JsonPathLexer.literals are included in field name need quotes
+        # This avoids unnecessary quotes to keep strings short.
+        # Test each field whether it contains a literal and only then add quotes
+        # The test loops over all literals, could possibly optimize to short circuit if one found
+        fields_as_str = ("'" + str(f) + "'" if any([l in f for l in JsonPathLexer.literals]) else
+                         str(f) for f in self.fields)
+        return ','.join(fields_as_str)
+
 
     def __repr__(self):
         return '%s(%s)' % (self.__class__.__name__, ','.join(map(repr, self.fields)))
 
     def __eq__(self, other):
         return isinstance(other, Fields) and tuple(self.fields) == tuple(other.fields)
+
+    def __hash__(self):
+        return hash(tuple(self.fields))
 
 
 class Index(JSONPath):
@@ -561,16 +647,35 @@ class Index(JSONPath):
         self.index = index
 
     def find(self, datum):
-        datum = DatumInContext.wrap(datum)
+        return self._find_base(datum, create=False)
 
+    def find_or_create(self, datum):
+        return self._find_base(datum, create=True)
+
+    def _find_base(self, datum, create):
+        datum = DatumInContext.wrap(datum)
+        if create:
+            if datum.value == {}:
+                datum.value = _create_list_key(datum.value)
+            self._pad_value(datum.value)
         if datum.value and len(datum.value) > self.index:
             return [DatumInContext(datum.value[self.index], path=self, context=datum)]
         else:
             return []
 
     def update(self, data, val):
+        return self._update_base(data, val, create=False)
+
+    def update_or_create(self, data, val):
+        return self._update_base(data, val, create=True)
+
+    def _update_base(self, data, val, create):
+        if create:
+            if data == {}:
+                data = _create_list_key(data)
+            self._pad_value(data)
         if hasattr(val, '__call__'):
-            val.__call__(data[self.index], data, self.index)
+            data[self.index] = val.__call__(data[self.index], data, self.index)
         elif len(data) > self.index:
             data[self.index] = val
         return data
@@ -585,6 +690,17 @@ class Index(JSONPath):
 
     def __str__(self):
         return '[%i]' % self.index
+
+    def __repr__(self):
+        return '%s(index=%r)' % (self.__class__.__name__, self.index)
+
+    def _pad_value(self, value):
+        if len(value) <= self.index:
+            pad = self.index - len(value) + 1
+            value += [{} for __ in range(pad)]
+
+    def __hash__(self):
+        return hash(self.index)
 
 
 class Slice(JSONPath):
@@ -624,13 +740,13 @@ class Slice(JSONPath):
             return []
         # Here's the hack. If it is a dictionary or some kind of constant,
         # put it in a single-element list
-        if (isinstance(datum.value, dict) or isinstance(datum.value, six.integer_types) or isinstance(datum.value, six.string_types)):
+        if (isinstance(datum.value, dict) or isinstance(datum.value, int) or isinstance(datum.value, str)):
             return self.find(DatumInContext([datum.value], path=datum.path, context=datum.context))
 
         # Some iterators do not support slicing but we can still
         # at least work for '*'
-        if self.start == None and self.end == None and self.step == None:
-            return [DatumInContext(datum.value[i], path=Index(i), context=datum) for i in xrange(0, len(datum.value))]
+        if self.start is None and self.end is None and self.step is None:
+            return [DatumInContext(datum.value[i], path=Index(i), context=datum) for i in range(0, len(datum.value))]
         else:
             return [DatumInContext(datum.value[i], path=Index(i), context=datum) for i in range(0, len(datum.value))[self.start:self.end:self.step]]
 
@@ -652,7 +768,7 @@ class Slice(JSONPath):
         return data
 
     def __str__(self):
-        if self.start == None and self.end == None and self.step == None:
+        if self.start is None and self.end is None and self.step is None:
             return '[*]'
         else:
             return '[%s%s%s]' % (self.start or '',
@@ -664,3 +780,36 @@ class Slice(JSONPath):
 
     def __eq__(self, other):
         return isinstance(other, Slice) and other.start == self.start and self.end == other.end and other.step == self.step
+
+    def __hash__(self):
+        return hash((self.start, self.end, self.step))
+
+
+def _create_list_key(dict_):
+    """
+    Adds a list to a dictionary by reference and returns the list.
+
+    See `_clean_list_keys()`
+    """
+    dict_[LIST_KEY] = new_list = [{}]
+    return new_list
+
+
+def _clean_list_keys(struct_):
+    """
+    Replace {LIST_KEY: ['foo', 'bar']} with ['foo', 'bar'].
+
+    >>> _clean_list_keys({LIST_KEY: ['foo', 'bar']})
+    ['foo', 'bar']
+
+    """
+    if(isinstance(struct_, list)):
+        for ind, value in enumerate(struct_):
+            struct_[ind] = _clean_list_keys(value)
+    elif(isinstance(struct_, dict)):
+        if(LIST_KEY in struct_):
+            return _clean_list_keys(struct_[LIST_KEY])
+        else:
+            for key, value in struct_.items():
+                struct_[key] = _clean_list_keys(value)
+    return struct_

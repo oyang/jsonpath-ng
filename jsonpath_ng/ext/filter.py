@@ -13,7 +13,6 @@
 
 import operator
 import re
-from six import moves
 
 from .. import JSONPath, DatumInContext, Index
 
@@ -26,7 +25,7 @@ OPERATOR_MAP = {
     '<': operator.lt,
     '>=': operator.ge,
     '>': operator.gt,
-    '=~': lambda a, b: True if re.search(b, a) else False,
+    '=~': lambda a, b: True if isinstance(a, str) and re.search(b, a) else False,
 }
 
 
@@ -49,10 +48,20 @@ class Filter(JSONPath):
             return []
 
         return [DatumInContext(datum.value[i], path=Index(i), context=datum)
-                for i in moves.range(0, len(datum.value))
+                for i in range(0, len(datum.value))
                 if (len(self.expressions) ==
                     len(list(filter(lambda x: x.find(datum.value[i]),
                                     self.expressions))))]
+
+    def filter(self, fn, data):
+        # NOTE: We reverse the order just to make sure the indexes are preserved upon
+        #  removal.
+        for datum in reversed(self.find(data)):
+            index_obj = datum.path
+            if isinstance(data, dict):
+                index_obj.index = list(data)[index_obj.index]
+            index_obj.filter(fn, data)
+        return data
 
     def update(self, data, val):
         if type(data) is list:
@@ -70,6 +79,10 @@ class Filter(JSONPath):
 
     def __str__(self):
         return '[?%s]' % self.expressions
+
+    def __eq__(self, other):
+        return (isinstance(other, Filter)
+                and self.expressions == other.expressions)
 
 
 class Expression(JSONPath):
@@ -108,7 +121,7 @@ class Expression(JSONPath):
         return found
 
     def __eq__(self, other):
-        return (isinstance(other, Filter) and
+        return (isinstance(other, Expression) and
                 self.target == other.target and
                 self.op == other.op and
                 self.value == other.value)

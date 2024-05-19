@@ -1,19 +1,21 @@
-from __future__ import print_function, absolute_import, division, generators, nested_scopes
+import logging
 import sys
 import os.path
-import logging
 
 import ply.yacc
 
+from jsonpath_ng.exceptions import JsonPathParserError
 from jsonpath_ng.jsonpath import *
 from jsonpath_ng.lexer import JsonPathLexer
 
 logger = logging.getLogger(__name__)
 
+
 def parse(string):
     return JsonPathParser().parse(string)
 
-class JsonPathParser(object):
+
+class JsonPathParser:
     '''
     An LALR-parser for JsonPath
     '''
@@ -21,8 +23,12 @@ class JsonPathParser(object):
     tokens = JsonPathLexer.tokens
 
     def __init__(self, debug=False, lexer_class=None):
-        if self.__doc__ == None:
-            raise Exception('Docstrings have been removed! By design of PLY, jsonpath-rw requires docstrings. You must not use PYTHONOPTIMIZE=2 or python -OO.')
+        if self.__doc__ is None:
+            raise JsonPathParserError(
+                'Docstrings have been removed! By design of PLY, '
+                'jsonpath-rw requires docstrings. You must not use '
+                'PYTHONOPTIMIZE=2 or python -OO.'
+            )
 
         self.debug = debug
         self.lexer_class = lexer_class or JsonPathLexer # Crufty but works around statefulness in PLY
@@ -43,7 +49,8 @@ class JsonPathParser(object):
 
         parsing_table_module = '_'.join([module_name, start_symbol, 'parsetab'])
 
-        # And we regenerate the parse table every time; it doesn't actually take that long!
+        # And we regenerate the parse table every time;
+        # it doesn't actually take that long!
         new_parser = ply.yacc.yacc(module=self,
                                    debug=self.debug,
                                    tabmodule = parsing_table_module,
@@ -66,7 +73,10 @@ class JsonPathParser(object):
     ]
 
     def p_error(self, t):
-        raise Exception('Parse error at %s:%s near token %s (%s)' % (t.lineno, t.col, t.value, t.type))
+        if t is None:
+            raise JsonPathParserError('Parse error near the end of string!')
+        raise JsonPathParserError('Parse error at %s:%s near token %s (%s)'
+                                  % (t.lineno, t.col, t.value, t.type))
 
     def p_jsonpath_binop(self, p):
         """jsonpath : jsonpath '.' jsonpath
@@ -98,7 +108,8 @@ class JsonPathParser(object):
         elif p[1] == 'parent':
             p[0] = Parent()
         else:
-            raise Exception('Unknown named operator `%s` at %s:%s' % (p[1], p.lineno(1), p.lexpos(1)))
+            raise JsonPathParserError('Unknown named operator `%s` at %s:%s'
+                                      % (p[1], p.lineno(1), p.lexpos(1)))
 
     def p_jsonpath_root(self, p):
         "jsonpath : '$'"
@@ -158,8 +169,9 @@ class JsonPathParser(object):
         p[0] = Slice()
 
     def p_slice(self, p): # Currently does not support `step`
-        "slice : maybe_int ':' maybe_int"
-        p[0] = Slice(start=p[1], end=p[3])
+        """slice : maybe_int ':' maybe_int
+                 | maybe_int ':' maybe_int ':' maybe_int """
+        p[0] = Slice(*p[1::2])
 
     def p_maybe_int(self, p):
         """maybe_int : NUMBER
@@ -170,7 +182,7 @@ class JsonPathParser(object):
         'empty :'
         p[0] = None
 
-class IteratorToTokenStream(object):
+class IteratorToTokenStream:
     def __init__(self, iterator):
         self.iterator = iterator
 
