@@ -11,7 +11,7 @@ About
 -----
 
 This library provides a robust and significantly extended implementation
-of JSONPath for Python. It is tested with CPython 3.7 and higher.
+of JSONPath for Python. It is tested with CPython 3.8 and higher.
 
 This library differs from other JSONPath implementations in that it is a
 full *language* implementation, meaning the JSONPath expressions are
@@ -126,19 +126,21 @@ Atomic expressions:
 
 Jsonpath operators:
 
-+-------------------------------------+------------------------------------------------------------------------------------+
-| Syntax                              | Meaning                                                                            |
-+=====================================+====================================================================================+
-| *jsonpath1* ``.`` *jsonpath2*       | All nodes matched by *jsonpath2* starting at any node matching *jsonpath1*         |
-+-------------------------------------+------------------------------------------------------------------------------------+
-| *jsonpath* ``[`` *whatever* ``]``   | Same as *jsonpath*\ ``.``\ *whatever*                                              |
-+-------------------------------------+------------------------------------------------------------------------------------+
-| *jsonpath1* ``..`` *jsonpath2*      | All nodes matched by *jsonpath2* that descend from any node matching *jsonpath1*   |
-+-------------------------------------+------------------------------------------------------------------------------------+
-| *jsonpath1* ``where`` *jsonpath2*   | Any nodes matching *jsonpath1* with a child matching *jsonpath2*                   |
-+-------------------------------------+------------------------------------------------------------------------------------+
-| *jsonpath1* ``|`` *jsonpath2*       | Any nodes matching the union of *jsonpath1* and *jsonpath2*                        |
-+-------------------------------------+------------------------------------------------------------------------------------+
++--------------------------------------+-----------------------------------------------------------------------------------+
+| Syntax                               | Meaning                                                                           |
++======================================+===================================================================================+
+| *jsonpath1* ``.`` *jsonpath2*        | All nodes matched by *jsonpath2* starting at any node matching *jsonpath1*        |
++--------------------------------------+-----------------------------------------------------------------------------------+
+| *jsonpath* ``[`` *whatever* ``]``    | Same as *jsonpath*\ ``.``\ *whatever*                                             |
++--------------------------------------+-----------------------------------------------------------------------------------+
+| *jsonpath1* ``..`` *jsonpath2*       | All nodes matched by *jsonpath2* that descend from any node matching *jsonpath1*  |
++--------------------------------------+-----------------------------------------------------------------------------------+
+| *jsonpath1* ``where`` *jsonpath2*    | Any nodes matching *jsonpath1* with a child matching *jsonpath2*                  |
++--------------------------------------+-----------------------------------------------------------------------------------+
+| *jsonpath1* ``wherenot`` *jsonpath2* | Any nodes matching *jsonpath1* with a child not matching *jsonpath2*              |
++--------------------------------------+-----------------------------------------------------------------------------------+
+| *jsonpath1* ``|`` *jsonpath2*        | Any nodes matching the union of *jsonpath1* and *jsonpath2*                       |
++--------------------------------------+-----------------------------------------------------------------------------------+
 
 Field specifiers ( *field* ):
 
@@ -211,10 +213,16 @@ To use the extensions below you must import from `jsonpath_ng.ext`.
 +==============+===============================================+
 | len          | - ``$.objects.`len```                         |
 +--------------+-----------------------------------------------+
+| keys         | - ``$.objects.`keys```                        |
++--------------+-----------------------------------------------+
+| str          | - ``$.field.`str()```                         |
++--------------+-----------------------------------------------+
 | sub          | - ``$.field.`sub(/foo\\\\+(.*)/, \\\\1)```    |
 |              | - ``$.field.`sub(/regex/, replacement)```     |
 +--------------+-----------------------------------------------+
 | split        | - ``$.field.`split(+, 2, -1)```               |
+|              | - ``$.field.`split(",", *, -1)```             |
+|              | - ``$.field.`split(' ', -1, -1)```            |
 |              | - ``$.field.`split(sep, segement, maxsplit)```|
 +--------------+-----------------------------------------------+
 | sorted       | - ``$.objects.`sorted```                      |
@@ -245,7 +253,7 @@ About arithmetic and string
 ---------------------------
 
 Operations are done with python operators and allows types that python
-allows, and return [] if the operation can be done due to incompatible types.
+allows, and return [] if the operation can't be done due to incompatible types.
 
 When operators are used, a jsonpath must be be fully defined otherwise
 jsonpath-rw-ext can't known if the expression is a string or a jsonpath field,

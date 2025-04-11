@@ -1,11 +1,12 @@
 import copy
 
 import pytest
-
+from typing import Callable
 from jsonpath_ng.ext.parser import parse as ext_parse
 from jsonpath_ng.jsonpath import DatumInContext, Fields, Root, This
 from jsonpath_ng.lexer import JsonPathLexerError
 from jsonpath_ng.parser import parse as base_parse
+from jsonpath_ng import JSONPath
 
 from .helpers import assert_full_path_equality, assert_value_equality
 
@@ -72,6 +73,8 @@ update_test_cases = (
     # -------
     #
     ("[0]", ["foo", "bar", "baz"], "test", ["test", "bar", "baz"]),
+    ("[0, 1]", ["foo", "bar", "baz"], "test", ["test", "test", "baz"]),
+    ("[0, 1]", ["foo", "bar", "baz"], ["test", "test 1"], ["test", "test 1", "baz"]),
     #
     # Slices
     # ------
@@ -127,6 +130,16 @@ update_test_cases = (
         {"foo": {"bar": 3, "flag": 1}, "baz": {"bar": 2}},
     ),
     #
+    # WhereNot
+    # --------
+    #
+    (
+        '(* wherenot flag) .. bar',
+        {'foo': {'bar': 1, 'flag': 1}, 'baz': {'bar': 2}},
+        4,
+        {'foo': {'bar': 1, 'flag': 1}, 'baz': {'bar': 4}},
+    ),
+    #
     # Lambdas
     # -------
     #
@@ -154,10 +167,25 @@ update_test_cases = (
     update_test_cases,
 )
 @parsers
-def test_update(parse, expression, data, update_value, expected_value):
+def test_update(parse: Callable[[str], JSONPath], expression: str, data, update_value, expected_value):
     data_copy = copy.deepcopy(data)
-    result = parse(expression).update(data_copy, update_value)
+    update_value_copy = copy.deepcopy(update_value)
+    result = parse(expression).update(data_copy, update_value_copy)
     assert result == expected_value
+
+    # inplace update testing
+    data_copy2 = copy.deepcopy(data)
+    update_value_copy2 = copy.deepcopy(update_value)
+    datums = parse(expression).find(data_copy2)
+    batch_update = isinstance(update_value, list) and len(datums) == len(update_value)
+    for i, datum in enumerate(datums):
+        if batch_update:
+            datum.value = update_value_copy2[i]
+        else:
+            datum.value = update_value_copy2
+        if isinstance(datum.full_path, (Root, This)): # when the type of `data` is str, int, float etc.
+            data_copy2 = datum.value
+    assert data_copy2 == expected_value
 
 
 find_test_cases = (
@@ -266,6 +294,11 @@ find_test_cases = (
     # --------
     #
     ("A.'a.c'", {"A": {"a.c": "d"}}, ["d"], ["A.'a.c'"]),
+    #
+    # Numeric keys
+    # --------
+    #
+    ("1", {"1": "foo"}, ["foo"], ["1"]),
 )
 
 

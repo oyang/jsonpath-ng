@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import List, Optional
 import logging
 from itertools import *  # noqa
 from jsonpath_ng.lexer import JsonPathLexer
@@ -20,7 +22,7 @@ class JSONPath:
     JSONPath semantics.
     """
 
-    def find(self, data):
+    def find(self, data) -> List[DatumInContext]:
         """
         All `JSONPath` types support `find()`, which returns an iterable of `DatumInContext`s.
         They keep track of the path followed to the current location, so if the calling code
@@ -99,10 +101,20 @@ class DatumInContext:
         else:
             return cls(data)
 
-    def __init__(self, value, path=None, context=None):
-        self.value = value
+    def __init__(self, value, path: Optional[JSONPath]=None, context: Optional[DatumInContext]=None):
+        self.__value__ = value
         self.path = path or This()
         self.context = None if context is None else DatumInContext.wrap(context)
+
+    @property
+    def value(self):
+        return self.__value__
+
+    @value.setter
+    def value(self, value):
+        if self.context is not None and self.context.value is not None:
+            self.path.update(self.context.value, value)
+        self.__value__ = value
 
     def in_context(self, context, path):
         context = DatumInContext.wrap(context)
@@ -113,7 +125,7 @@ class DatumInContext:
             return DatumInContext(value=self.value, path=path, context=context)
 
     @property
-    def full_path(self):
+    def full_path(self) -> JSONPath:
         return self.path if self.context is None else self.context.full_path.child(self.path)
 
     @property
@@ -193,7 +205,7 @@ class Root(JSONPath):
     The root is the topmost datum without any context attached.
     """
 
-    def find(self, data):
+    def find(self, data) -> List[DatumInContext]:
         if not isinstance(data, DatumInContext):
             return [DatumInContext(data, path=Root(), context=None)]
         else:
@@ -368,6 +380,36 @@ class Where(JSONPath):
 
     def __hash__(self):
         return hash((self.left, self.right))
+
+
+class WhereNot(Where):
+    """
+    Identical to ``Where``, but filters for only those nodes that
+    do *not* have a match on the right.
+
+    >>> jsonpath = WhereNot(Fields('spam'), Fields('spam'))
+    >>> jsonpath.find({"spam": {"spam": 1}})
+    []
+    >>> matches = jsonpath.find({"spam": 1})
+    >>> matches[0].value
+    1
+
+    """
+    def find(self, data):
+        return [subdata for subdata in self.left.find(data)
+                if not self.right.find(subdata)]
+
+    def __str__(self):
+        return '%s wherenot %s' % (self.left, self.right)
+
+    def __eq__(self, other):
+        return (isinstance(other, WhereNot)
+                and other.left == self.left
+                and other.right == self.right)
+
+    def __hash__(self):
+        return hash((self.left, self.right))
+
 
 class Descendants(JSONPath):
     """
@@ -643,8 +685,8 @@ class Index(JSONPath):
     NOTE: For the concrete syntax of `[*]`, the abstract syntax is a Slice() with no parameters (equiv to `[:]`
     """
 
-    def __init__(self, index):
-        self.index = index
+    def __init__(self, *indices):
+        self.indices = indices
 
     def find(self, datum):
         return self._find_base(datum, create=False)
@@ -658,10 +700,12 @@ class Index(JSONPath):
             if datum.value == {}:
                 datum.value = _create_list_key(datum.value)
             self._pad_value(datum.value)
-        if datum.value and len(datum.value) > self.index:
-            return [DatumInContext(datum.value[self.index], path=self, context=datum)]
-        else:
-            return []
+        rv = []
+        for index in self.indices:
+            # invalid indices do not crash, return [] instead
+            if datum.value and len(datum.value) > index:
+                rv += [DatumInContext(datum.value[index], path=Index(index), context=datum)]
+        return rv
 
     def update(self, data, val):
         return self._update_base(data, val, create=False)
@@ -675,28 +719,40 @@ class Index(JSONPath):
                 data = _create_list_key(data)
             self._pad_value(data)
         if hasattr(val, '__call__'):
-            data[self.index] = val.__call__(data[self.index], data, self.index)
-        elif len(data) > self.index:
-            data[self.index] = val
+            for index in self.indices:
+                val.__call__(data[index], data, index)
+        else:
+            for index in self.indices:
+                if len(data) > index:
+                    try:
+                        if isinstance(val, list):
+                            # allows somelist[5,1,2] = [some_value, another_value, third_value]
+                            data[index] = val.pop(0)
+                        else:
+                            data[index] = val
+                    except Exception as e:
+                        raise e
         return data
 
     def filter(self, fn, data):
-        if fn(data[self.index]):
-            data.pop(self.index)  # relies on mutation :(
+        for index in self.indices:
+            if fn(data[index]):
+                data.pop(index)  # relies on mutation :(
         return data
 
     def __eq__(self, other):
-        return isinstance(other, Index) and self.index == other.index
+        return isinstance(other, Index) and sorted(self.indices) == sorted(other.indices)
 
     def __str__(self):
-        return '[%i]' % self.index
+        return '[%i]' % self.indices
 
     def __repr__(self):
-        return '%s(index=%r)' % (self.__class__.__name__, self.index)
+        return '%s(indices=%r)' % (self.__class__.__name__, self.indices)
 
     def _pad_value(self, value):
-        if len(value) <= self.index:
-            pad = self.index - len(value) + 1
+        _max = max(self.indices)
+        if len(value) <= _max:
+            pad = _max - len(value) + 1
             value += [{} for __ in range(pad)]
 
     def __hash__(self):

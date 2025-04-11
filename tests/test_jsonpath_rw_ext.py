@@ -69,6 +69,12 @@ test_cases = (
         id="keys_dict",
     ),
     pytest.param(
+        "objects.cow.`path`",
+        {"objects": {"cow": "moo", "cat": "neigh"}},
+        "cow",
+        id="path_dict",
+    ),
+    pytest.param(
         "objects[?cow]",
         {"objects": [{"cow": "moo"}, {"cat": "neigh"}]},
         [{"cow": "moo"}],
@@ -393,6 +399,36 @@ test_cases = (
         {"payload": "foo-bar-cat-bow"},
         ["cat-bow"],
         id="split2",
+    ),
+    pytest.param(
+        "payload.`split(',', 2, -1)`",
+        {"payload": "foo,bar,baz"},
+        ["baz"],
+        id="split3",
+    ),
+    pytest.param(
+        'payload.`split(", ", 2, -1)`',
+        {"payload": "foo, bar, baz"},
+        ["baz"],
+        id="split4",
+    ),
+    pytest.param(
+        'payload.`split(", ", *, -1)`',
+        {"payload": "foo, bar, baz"},
+        [["foo", "bar", "baz"]],
+        id="split5",
+    ),
+    pytest.param(
+        'payload.`split(", ", -1, -1)`',
+        {"payload": "foo, bar, baz"},
+        ["baz"],
+        id="split6",
+    ),
+    pytest.param(
+        "payload.`split(|, -1, 1)`",
+        {"payload": "foo|bar|baz"},
+        ["bar|baz"],
+        id="split7",
     ),
     pytest.param(
         "foo[?(@.baz==1)]",
